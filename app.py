@@ -1,4 +1,3 @@
-
 import os
 from datetime import datetime
 
@@ -6,6 +5,7 @@ import gradio as gr
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from accounts import Account
+import json
 
 from agents import (
     Agent,
@@ -119,9 +119,7 @@ async def get_researcher(mcp_servers) -> Agent:
     Take time to make multiple searches to get a comprehensive view, and then summarize your findings.
     If there in not a specific request , then just respond with the investment opportunities based on searching latest news.
     The current datetime is {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-
     RESEARCH RULES:
-
 - Use as few searches as necessary to answer the question accurately.
 - Start with broad searches and only perform follow-up searches when needed.
 - Never repeatedly search for the same information.
@@ -247,24 +245,43 @@ Please make use of these tools to manage your portfolio. Carry out trades as you
 
 async def get_account_report():
     try:
-        account_details = await read_accounts_resource(agent_name)
         strategy = await read_strategy_resource(agent_name)
 
+        raw = await read_accounts_resource(agent_name)
+        account = json.loads(raw)
+
+        holdings = account.get("holdings", {})
+        transactions = account.get("transactions", [])
+
+        holdings_text = "\n".join(
+            f"• {symbol}: {qty} shares"
+            for symbol, qty in holdings.items()
+        ) or "No holdings"
+
+        recent_transactions = "\n".join(
+            f"• {t['symbol']} | {t['quantity']} @ ${t['price']:.2f}"
+            for t in transactions[-5:]
+        ) or "No transactions"
+
         return f"""
-# 📊 Account Report
-
-### Trader
-{agent_name}
-
-### Strategy
+📊 ACCOUNT REPORT
+Trader: {account['name'].title()}
+💰 Balance
+${account['balance']:,.2f}
+📈 Total Portfolio Value
+${account['total_portfolio_value']:,.2f}
+📉 Profit / Loss
+${account['total_profit_loss']:,.2f}
+🎯 Strategy
 {strategy}
-
-### Current Portfolio
-
-{account_details}
+🏦 Holdings
+{holdings_text}
+📝 Recent Transactions
+{recent_transactions}
 """
+
     except Exception as e:
-        return f"Error loading account report:\n\n{str(e)}"
+        return f"Error loading account report:\n\n{e}"
 
 async def execute():
     try:
@@ -286,8 +303,10 @@ with gr.Blocks(
 
     with gr.Row():
 
-        account_report = gr.Markdown(
-            value="Loading account report..."
+        account_report = gr.Textbox(
+            label="📊 Account Report",
+            lines=25,
+            interactive=False
         )
 
         trader_output = gr.Textbox(
@@ -324,4 +343,8 @@ with gr.Blocks(
 
 
 if __name__ == "__main__":
-    ui.launch(inbrowser=True)   
+    ui.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        show_error=True,
+    ) 
