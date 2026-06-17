@@ -1,12 +1,12 @@
+
 import os
 from datetime import datetime
-
+from tracer import trace_processor
 import gradio as gr
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from accounts import Account
 import json
-
 from agents import (
     Agent,
     Runner,
@@ -14,6 +14,7 @@ from agents import (
     trace,
     OpenAIChatCompletionsModel,
 )
+import asyncio
 
 from agents.mcp import MCPServerStdio
 
@@ -119,7 +120,9 @@ async def get_researcher(mcp_servers) -> Agent:
     Take time to make multiple searches to get a comprehensive view, and then summarize your findings.
     If there in not a specific request , then just respond with the investment opportunities based on searching latest news.
     The current datetime is {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
     RESEARCH RULES:
+
 - Use as few searches as necessary to answer the question accurately.
 - Start with broad searches and only perform follow-up searches when needed.
 - Never repeatedly search for the same information.
@@ -163,7 +166,7 @@ async def get_researcher_tool(mcp_servers) -> Tool:
 
 agent_name = "Harsh"
 harsh_initial_strategy="You are a day trader who aggressively buys and sells shares based on the news and market conditions."
-Account.get("Harsh").reset(harsh_initial_strategy)
+Account.get("Harsh").change_strategy(harsh_initial_strategy)
 
 prompt = """
 Use your tools to make decisions about your portfolio.
@@ -192,6 +195,8 @@ async def connect_servers():
 # ============================================================
 
 async def run_trader():
+
+    trace_processor.clear()
 
     await connect_servers()
 
@@ -231,7 +236,10 @@ Please make use of these tools to manage your portfolio. Carry out trades as you
             max_turns=20,
         )
 
-    return result.final_output
+    return (
+    result.final_output,
+    trace_processor.get_text()
+    )
 
 # ============================================================
 # GRADIO
@@ -283,12 +291,34 @@ ${account['total_profit_loss']:,.2f}
     except Exception as e:
         return f"Error loading account report:\n\n{e}"
 
+
 async def execute():
-    try:
-        result = await run_trader()
-        return result
-    except Exception as e:
-        return f"Error:\\n\\n{str(e)}"
+    yield "", "🚀 Starting..."
+
+    task = asyncio.create_task(run_trader())
+
+    previous = 0
+
+    while not task.done():
+
+        current_events = trace_processor.events
+
+        if len(current_events) > previous:
+            previous = len(current_events)
+
+            yield (
+                "",
+                "\n".join(current_events)
+            )
+
+        await asyncio.sleep(0.5)
+
+    output, traces = await task
+
+    yield (
+        output,
+        traces
+    )
 
 
 # ============================================================
@@ -315,6 +345,12 @@ with gr.Blocks(
             interactive=False
         )
 
+    trace_output = gr.Textbox(
+        label="🔍 Agent Trace",
+        lines=12,
+        interactive=False
+    )
+
     with gr.Row():
 
         refresh_btn = gr.Button("🔄 Refresh Report")
@@ -326,12 +362,15 @@ with gr.Blocks(
         outputs=account_report
     )
 
-    run_btn.click(
+    run_event = run_btn.click(
         fn=execute,
-        outputs=trader_output
+        outputs=[
+            trader_output,
+            trace_output
+        ]
     )
 
-    run_btn.click(
+    run_event.then(
         fn=get_account_report,
         outputs=account_report
     )
@@ -341,10 +380,5 @@ with gr.Blocks(
         outputs=account_report
     )
 
-
 if __name__ == "__main__":
-    ui.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
-        show_error=True,
-    ) 
+    ui.launch(inbrowser=True)
